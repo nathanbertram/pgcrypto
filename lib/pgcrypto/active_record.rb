@@ -38,8 +38,8 @@ ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.class_eval do
     # We start by looping through each "core," which is just
     # a SelectStatement and correcting plain-text queries
     # against an encrypted column...
-    joins = {}
     table_name = nil
+    joins = {}
     arel.ast.cores.each do |core|
       # Yeah, I'm lazy. Whatevs.
       next unless core.is_a?(Arel::Nodes::SelectCore)
@@ -50,35 +50,7 @@ ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.class_eval do
       # We loop through each WHERE specification to determine whether or not the
       # PGCrypto column should be JOIN'd upon; in which case, we, like, do it.
       core.wheres.each do |where|
-        if where.respond_to?(:children)
-          children = where.children
-        elsif where.respond_to?(:expr)
-          children = [where.expr]
-        else
-          children = []
-        end
-        # Now loop through the children to encrypt them for the SELECT
-        children.each do |child|
-          next unless child.respond_to?(:left) and child.left.respond_to?(:name)
-          child_table_name = table_name
-          child_table_name = child.left.relation.name.classify.constantize.table_name if child.left.respond_to?(:relation)
-          if PGCrypto[child_table_name]
-            column_options = PGCrypto[child_table_name][child.left.name.to_s]
-          else
-            column_options = encrypted_columns[child.left.name.to_s]
-          end
-          next unless column_options
-          joins[child_table_name] ||= []
-          joins[child_table_name].push(child.left.name.to_s) unless joins.include?(child.left.name.to_s)
-          pgcrypto_table = PGCrypto::Column.arel_table.alias("#{PGCrypto::Column.table_name}_#{child.left.name}")
-          keys_table = Arel::Table.new('pgcrypto_keys')
-          decrypt_node = Arel::Nodes::NamedFunction.new('pgp_pub_decrypt', [pgcrypto_table[:value], keys_table["#{key.name}#{key.password?}"]])
-          if column_options[:column_type]
-            column_type_node = Arel::Nodes::SqlLiteral.new(column_options[:column_type].to_s)
-            decrypt_node = Arel::Nodes::InfixOperation.new('::', decrypt_node, column_type_node)
-          end
-          child.left = decrypt_node
-        end
+        pgcrypto_modify_where(table_name, key, joins, where)
       end
     end
     if joins.any?
@@ -91,6 +63,38 @@ ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.class_eval do
             JOIN "#{PGCrypto::Column.table_name}" AS "#{as_table}" ON "#{as_table}"."owner_id" = "#{table}"."id" AND "#{as_table}"."owner_table" = '#{quote_string(table)}' AND "#{as_table}"."name" = '#{column}'
           ]))
         end
+      end
+    end
+  end
+
+  def pgcrypto_modify_where(table_name, key, joins, children)
+    children.each do |child|
+      if child.respond_to?(:children)
+        pgcrypto_modify_where(table_name, key, joins, child.children)
+      elsif child.respond_to?(:expr)
+        pgcrypto_modify_where(table_name, key, joins, [child.expr])
+      else
+        next unless child.respond_to?(:left) and child.left.respond_to?(:name)
+        child_table_name = table_name
+        child_table_name = child.left.relation.name.classify.constantize.table_name if child.left.respond_to?(:relation)
+        if PGCrypto[child_table_name]
+          column_options = PGCrypto[child_table_name][child.left.name.to_s]
+        else
+          column_options = PGCrypto[table_name][child.left.name.to_s]
+        end
+        next unless column_options
+        joins[child_table_name] ||= []
+        joins[child_table_name].push(child.left.name.to_s) unless joins[child_table_name].include?(child.left.name.to_s)
+        pgcrypto_table = PGCrypto::Column.arel_table.alias("#{PGCrypto::Column.table_name}_#{child.left.name}")
+        keys_table = Arel::Table.new('pgcrypto_keys')
+        decrypt_node_arguments = [pgcrypto_table[:value], keys_table[key.name]]
+        decrypt_node_arguments << key.password if key.password
+        decrypt_node = Arel::Nodes::NamedFunction.new('pgp_pub_decrypt', decrypt_node_arguments)
+        if column_options[:column_type]
+          column_type_node = Arel::Nodes::SqlLiteral.new(column_options[:column_type].to_s)
+          decrypt_node = Arel::Nodes::InfixOperation.new('::', decrypt_node, column_type_node)
+        end
+        child.left = decrypt_node
       end
     end
   end
