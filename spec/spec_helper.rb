@@ -45,12 +45,12 @@ RSpec.configure do |config|
           t.string :name, :limit => 32
         end
 
-        create_table :foos, force: true do |t|
+        create_table :chemicals, force: true do |t|
           t.timestamps
         end
 
-        create_table :bars, force: true do |t|
-          t.integer :foo_id
+        create_table :elements, force: true do |t|
+          t.integer :chemical_id
           t.timestamps
         end
       end
@@ -69,15 +69,22 @@ RSpec.configure do |config|
       pgcrypto :test_column
     end
 
-    class Foo < ActiveRecord::Base
-      pgcrypto :address
-      has_many :bars
+    class Chemical < ActiveRecord::Base
+      pgcrypto :secret_formula
+      has_many :elements
     end
 
-    class Bar < ActiveRecord::Base
-      pgcrypto :something
-      belongs_to :foo
+    class Element < ActiveRecord::Base
+      pgcrypto :atomic_number, column_type: :integer
+      pgcrypto :name
+      belongs_to :chemical
     end
+  end
+
+  config.before :each do
+    keypath = File.expand_path('../support', __FILE__)
+    PGCrypto.keys[:private] = {:path => File.join(keypath, 'private.key')}
+    PGCrypto.keys[:public] = {:path => File.join(keypath, 'public.key')}
   end
 
   config.after :all do
