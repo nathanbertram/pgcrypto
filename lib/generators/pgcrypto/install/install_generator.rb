@@ -1,4 +1,5 @@
 require 'rails/generators/migration'
+require 'rails/generators/active_record'
 
 module Pgcrypto
   module Generators
@@ -16,7 +17,7 @@ module Pgcrypto
       end
 
       def self.next_migration_number(path)
-        @migration_number = Time.now.utc.strftime("%Y%m%d%H%M%S").to_i.to_s
+        ActiveRecord::Generators::Base.next_migration_number(dirname)
       end
 
     end
